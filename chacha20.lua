@@ -40,6 +40,24 @@ ffi.cdef([[
 
 local Chacha20Ctx = ffi.metatype('chacha20_ctx', chacha20)
 
+chacha20.test = function()
+    local input = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+
+
+    local e = chacha20.new('11223344556677889910111213141516', '12345678')
+    local encrypted = ffi.new('uint8_t[?]', #input)
+    e:encrypt(input, encrypted, #input)
+--    print('encrypted', ffi.string(encrypted, #input))
+
+
+    local d = chacha20.new('11223344556677889910111213141516', '12345678')
+    local decrypted = ffi.new('uint8_t[?]', #input)
+    d:decrypt(encrypted, decrypted, #input)
+--    print('decrypted', ffi.string(decrypted, #input))
+    print('decrypted match original:', ffi.string(decrypted, #input) == input)
+    error('exit')
+end
+
 function chacha20.new(key, nonce)
     if type(key) == 'string' then
         assert(#key == 32, 'key len must be 32 byte')
@@ -77,15 +95,30 @@ function chacha20.new(key, nonce)
     return ctx
 end
 
-local function chacha20Xor(keystream, input, outut, length)
+local function chacha20Xor(keystream, input, output, length)
     local end_keystream = ffi.cast('uint8_t*', keystream + length)
     repeat
-        outut[0] = bxor(input[0], keystream[0])
+        output[0] = bxor(input[0], keystream[0])
 
         input = input + 1
-        outut = outut + 1
+        output = output + 1
         keystream = keystream + 1
     until keystream == end_keystream
+    return input, output
+end
+
+local function QUARTERROUND(x, a, b, c, d)
+    x[a] = x[a] + x[b]
+    x[d] = ROTL32(bxor(x[d], x[a]), 16)
+
+    x[c] = x[c] + x[d]
+    x[b] = ROTL32(bxor(x[b], x[c]), 12)
+
+    x[a] = x[a] + x[b]
+    x[d] = ROTL32(bxor(x[d], x[a]), 8)
+
+    x[c] = x[c] + x[d]
+    x[b] = ROTL32(bxor(x[b], x[c]), 7)
 end
 
 local function chacha20Block(ctx, out)
@@ -165,6 +198,16 @@ local function chacha20Block(ctx, out)
         out[14] = ROTL32(bxor(out[14], out[3]), 8)
         out[9] = out[9] + out[14]
         out[4] = ROTL32(bxor(out[4], out[9]), 7)
+
+        -- why this fail ? o_O
+--        QUARTERROUND(out, 0, 4, 8, 12)
+--        QUARTERROUND(out, 1, 5, 9, 13)
+--        QUARTERROUND(out, 2, 6, 10, 14)
+--        QUARTERROUND(out, 3, 7, 11, 15)
+--        QUARTERROUND(out, 0, 5, 10, 15)
+--        QUARTERROUND(out, 1, 6, 11, 12)
+--        QUARTERROUND(out, 2, 7, 8, 13)
+--        QUARTERROUND(out, 3, 4, 9, 14)
     end
 
     for i = 0, 16 do
@@ -192,7 +235,7 @@ function chacha20.encrypt(self, input, output, length)
     local keystreamLen = sizeof(self.keystream)
     if self.available > 0 then
         local amount = min(length, self.available)
-        chacha20Xor(k + (keystreamLen - self.available), input, output, amount)
+        input, output = chacha20Xor(k + (keystreamLen - self.available), input, output, amount)
         self.available = self.available - amount
         length = length - amount
     end
@@ -200,7 +243,7 @@ function chacha20.encrypt(self, input, output, length)
     while length > 0 do
         local amount = min(length, keystreamLen)
         chacha20Block(self, self.keystream)
-        chacha20Xor(k, input, output, amount)
+        input, output = chacha20Xor(k, input, output, amount)
         length = length - amount
         self.available = keystreamLen - amount
     end
