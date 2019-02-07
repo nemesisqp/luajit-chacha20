@@ -210,7 +210,7 @@ local function chacha20Block(ctx, out)
 --        QUARTERROUND(out, 3, 4, 9, 14)
     end
 
-    for i = 0, 16 do
+    for i = 0, 15 do
         FROMLE(out + i, out[i] + ctx.schedule[i])
     end
 
